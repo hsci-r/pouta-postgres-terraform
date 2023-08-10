@@ -1,0 +1,57 @@
+#cloud-config
+disk_setup:
+  /dev/vdb:
+    table_type: "gpt"
+    layout:
+      - [15, 82]
+      - 15
+      - 70
+    overwrite: True
+mounts:
+  - [/dev/vdb]
+package_update: true
+package_upgrade: true
+packages:
+  - mosh
+  - nmon
+  - zfsutils-linux
+write_files:
+  - path: /docker-compose.yml
+    content: |
+      version: '3'
+      services:
+        ${project_name}-postgres:
+          image: postgres
+          restart: always
+          ports:
+           - 5432:5432
+          volumes:
+           - "./var-lib-postgresql-data:/var/lib/postgresql/data"
+          environment:
+           - "POSTGRES_PASSWORD=${postgres_root_password}"
+           - "POSTGRES_USER=${postgres_root_user}"
+           - "POSTGRES_DB=${postgres_database}"
+           - "PGDATA=/var/lib/postgresql/data/pgdata"
+  - path: /init.sh
+    content: |
+      #!/bin/sh
+      mkswap /dev/vdb1
+      swapon /dev/vdb1
+      if zpool import | grep -q "pool: z"; then
+        zpool import -f -m z
+        zpool replace z /dev/vdb2
+        zpool add z cache /dev/vdb3
+      else
+        zpool create z /dev/vdc log /dev/vdb2 cache /dev/vdb3
+        zfs create z/var-lib-docker -o mountpoint=/var/lib/docker
+        zfs create z/data
+        mkdir /z/data/${project_name}-postgres
+        mkdir /z/data/${project_name}-postgres/var-lib-postgresql-data
+        cp /docker-compose.yml /z/data/${project_name}-postgres
+      fi
+      cd /z/data/${project_name}-postgres
+      apt install -y docker-compose
+      docker-compose up -d
+runcmd:
+  - [chmod, u+x, /init.sh]
+  - [sh, -c, /init.sh]
